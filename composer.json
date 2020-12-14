@@ -1,6 +1,6 @@
 {
-    "name": "smartervision/laravel-generator",
-    "description": "Smarter Vision Generator",
+    "name": "theordercloud/laravel-generator",
+    "description": "The Order Cloud Generator",
     "keywords": [
         "laravel",
         "api",
@@ -18,12 +18,8 @@
     "license": "MIT",
     "authors": [
         {
-            "name": "Smarter Vision",
-            "email": "smartersvision@gmail.com"
-        },
-        {
-            "name": "Mitul Golakiya",
-            "email": "me@mitul.me"
+            "name": "The Order Cloud",
+            "email": "hello@theorder.cloud"
         }
     ],
     "require": {
