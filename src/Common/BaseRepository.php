@@ -54,7 +54,7 @@ abstract class BaseRepository extends \Prettus\Repository\Eloquent\BaseRepositor
                 $methodClass = get_class($model->$key($key));
                 switch ($methodClass) {
                     case 'Illuminate\Database\Eloquent\Relations\BelongsToMany':
-                        $new_values = array_get($attributes, $key, []);
+                        $new_values = Arr::get($attributes, $key, []);
                         if (array_search('', $new_values) !== false) {
                             unset($new_values[array_search('', $new_values)]);
                         }
