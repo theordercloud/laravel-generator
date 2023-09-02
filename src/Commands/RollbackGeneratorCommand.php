@@ -2,12 +2,12 @@
 
 namespace InfyOm\Generator\Commands;
 
-use Illuminate\Console\Command;
-use InfyOm\Generator\Common\CommandData;
+use InfyOm\Generator\Common\GeneratorConfig;
 use InfyOm\Generator\Generators\API\APIControllerGenerator;
 use InfyOm\Generator\Generators\API\APIRequestGenerator;
 use InfyOm\Generator\Generators\API\APIRoutesGenerator;
 use InfyOm\Generator\Generators\API\APITestGenerator;
+use InfyOm\Generator\Generators\FactoryGenerator;
 use InfyOm\Generator\Generators\MigrationGenerator;
 use InfyOm\Generator\Generators\ModelGenerator;
 use InfyOm\Generator\Generators\RepositoryGenerator;
@@ -17,148 +17,107 @@ use InfyOm\Generator\Generators\Scaffold\MenuGenerator;
 use InfyOm\Generator\Generators\Scaffold\RequestGenerator;
 use InfyOm\Generator\Generators\Scaffold\RoutesGenerator;
 use InfyOm\Generator\Generators\Scaffold\ViewGenerator;
-use InfyOm\Generator\Generators\TestTraitGenerator;
-use InfyOm\Generator\Generators\VueJs\ControllerGenerator as VueJsControllerGenerator;
-use InfyOm\Generator\Generators\VueJs\ModelJsConfigGenerator;
-use InfyOm\Generator\Generators\VueJs\RoutesGenerator as VueJsRoutesGenerator;
-use InfyOm\Generator\Generators\VueJs\ViewGenerator as VueJsViewGenerator;
+use InfyOm\Generator\Generators\SeederGenerator;
 use Symfony\Component\Console\Input\InputArgument;
-use Symfony\Component\Console\Input\InputOption;
 
-class RollbackGeneratorCommand extends Command
+class RollbackGeneratorCommand extends BaseCommand
 {
-    /**
-     * The command Data.
-     *
-     * @var CommandData
-     */
-    public $commandData;
-    /**
-     * The console command name.
-     *
-     * @var string
-     */
+    public GeneratorConfig $config;
+
     protected $name = 'infyom:rollback';
-    /**
-     * The console command description.
-     *
-     * @var string
-     */
+
     protected $description = 'Rollback a full CRUD API and Scaffold for given model';
 
-    /**
-     * @var Composer
-     */
-    public $composer;
-
-    /**
-     * Create a new command instance.
-     */
-    public function __construct()
-    {
-        parent::__construct();
-
-        $this->composer = app()['composer'];
-    }
-
-    /**
-     * Execute the command.
-     *
-     * @return void
-     */
     public function handle()
     {
-        if (!in_array($this->argument('type'), [
-            CommandData::$COMMAND_TYPE_API,
-            CommandData::$COMMAND_TYPE_SCAFFOLD,
-            CommandData::$COMMAND_TYPE_API_SCAFFOLD,
-            CommandData::$COMMAND_TYPE_VUEJS,
-        ])) {
-            $this->error('invalid rollback type');
+        $this->config = app(GeneratorConfig::class);
+        $this->config->setCommand($this);
+        $this->config->init();
+
+        $type = $this->argument('type');
+        if (!in_array($type, ['api', 'scaffold', 'api_scaffold'])) {
+            $this->error('Invalid rollback type');
+
+            return 1;
         }
 
-        $migrate = $this->option('migrate');
+        $this->fireFileDeletingEvent($type);
+        $views = $this->option('views');
+        if (!empty($views)) {
+            $views = explode(',', $views);
+            $viewGenerator = new ViewGenerator();
+            $viewGenerator->rollback($views);
 
-        $this->commandData = new CommandData($this, $this->argument('type'));
-        $this->commandData->config->mName = $this->commandData->modelName = $this->argument('model');
+            $this->info('Generating autoload files');
+            $this->composer->dumpOptimized();
+            $this->fireFileDeletedEvent($type);
 
-        $this->commandData->config->init($this->commandData, ['tableName', 'prefix']);
+            return 0;
+        }
 
-        $migrationGenerator = new MigrationGenerator($this->commandData);
+        $migrationGenerator = app(MigrationGenerator::class);
         $migrationGenerator->rollback();
 
-        $modelGenerator = new ModelGenerator($this->commandData);
+        $modelGenerator = app(ModelGenerator::class);
         $modelGenerator->rollback();
 
-        $repositoryGenerator = new RepositoryGenerator($this->commandData);
-        $repositoryGenerator->rollback();
+        if ($this->config->options->repositoryPattern) {
+            $repositoryGenerator = app(RepositoryGenerator::class);
+            $repositoryGenerator->rollback();
+        }
 
-        $requestGenerator = new APIRequestGenerator($this->commandData);
-        $requestGenerator->rollback();
+        if (in_array($type, ['api', 'api_scaffold'])) {
+            $requestGenerator = app(APIRequestGenerator::class);
+            $requestGenerator->rollback();
 
-        $controllerGenerator = new APIControllerGenerator($this->commandData);
-        $controllerGenerator->rollback();
+            $controllerGenerator = app(APIControllerGenerator::class);
+            $controllerGenerator->rollback();
 
-        $routesGenerator = new APIRoutesGenerator($this->commandData);
-        $routesGenerator->rollback();
+            $routesGenerator = app(APIRoutesGenerator::class);
+            $routesGenerator->rollback();
+        }
 
-        $requestGenerator = new RequestGenerator($this->commandData);
-        $requestGenerator->rollback();
+        if (in_array($type, ['scaffold', 'api_scaffold'])) {
+            $requestGenerator = app(RequestGenerator::class);
+            $requestGenerator->rollback();
 
-        $controllerGenerator = new ControllerGenerator($this->commandData);
-        $controllerGenerator->rollback();
+            $controllerGenerator = app(ControllerGenerator::class);
+            $controllerGenerator->rollback();
 
-        $viewGenerator = new ViewGenerator($this->commandData);
-        $viewGenerator->rollback();
+            $viewGenerator = app(ViewGenerator::class);
+            $viewGenerator->rollback();
 
-        $routeGenerator = new RoutesGenerator($this->commandData);
-        $routeGenerator->rollback();
+            $routeGenerator = app(RoutesGenerator::class);
+            $routeGenerator->rollback();
 
-        $controllerGenerator = new VueJsControllerGenerator($this->commandData);
-        $controllerGenerator->rollback();
+            $menuGenerator = app(MenuGenerator::class);
+            $menuGenerator->rollback();
+        }
 
-        $routesGenerator = new VueJsRoutesGenerator($this->commandData);
-        $routesGenerator->rollback();
-
-        $viewGenerator = new VueJsViewGenerator($this->commandData);
-        $viewGenerator->rollback();
-
-        $modelJsConfigGenerator = new ModelJsConfigGenerator($this->commandData);
-        $modelJsConfigGenerator->rollback();
-
-        if ($this->commandData->getAddOn('tests')) {
-            $repositoryTestGenerator = new RepositoryTestGenerator($this->commandData);
+        if ($this->config->options->tests) {
+            $repositoryTestGenerator = app(RepositoryTestGenerator::class);
             $repositoryTestGenerator->rollback();
 
-            $testTraitGenerator = new TestTraitGenerator($this->commandData);
-            $testTraitGenerator->rollback();
-
-            $apiTestGenerator = new APITestGenerator($this->commandData);
+            $apiTestGenerator = app(APITestGenerator::class);
             $apiTestGenerator->rollback();
         }
 
-        if ($this->commandData->config->getAddOn('menu.enabled')) {
-            $menuGenerator = new MenuGenerator($this->commandData);
-            $menuGenerator->rollback();
+        if ($this->config->options->factory or $this->config->options->tests) {
+            $factoryGenerator = app(FactoryGenerator::class);
+            $factoryGenerator->rollback();
         }
-        if (!$migrate) {
-            $this->info('Generating autoload files');
-            $this->composer->dumpOptimized();
-        }
-    }
 
-    /**
-     * Get the console command options.
-     *
-     * @return array
-     */
-    public function getOptions()
-    {
-        return [
-            ['tableName', null, InputOption::VALUE_REQUIRED, 'Table Name'],
-            ['prefix', null, InputOption::VALUE_REQUIRED, 'Prefix for all files'],
-            ['migrate', null, InputOption::VALUE_NONE, 'specify if auto migrate'],
-        ];
+        if ($this->config->options->seeder) {
+            $seederGenerator = app(SeederGenerator::class);
+            $seederGenerator->rollback();
+        }
+
+        $this->info('Generating autoload files');
+        $this->composer->dumpOptimized();
+
+        $this->fireFileDeletedEvent($type);
+
+        return 0;
     }
 
     /**
@@ -170,7 +129,7 @@ class RollbackGeneratorCommand extends Command
     {
         return [
             ['model', InputArgument::REQUIRED, 'Singular Model name'],
-            ['type', InputArgument::REQUIRED, 'Rollback type: (api / scaffold / scaffold_api)'],
+            ['type', InputArgument::REQUIRED, 'Rollback type: (api / scaffold / api_scaffold)'],
         ];
     }
 }

@@ -2,237 +2,159 @@
 
 namespace InfyOm\Generator\Generators;
 
-use Illuminate\Support\Facades\Log;
-use InfyOm\Generator\Common\CommandData;
-use InfyOm\Generator\Common\GeneratorFieldRelation;
-use InfyOm\Generator\Utils\FileUtil;
+use Illuminate\Support\Str;
 use InfyOm\Generator\Utils\TableFieldsGenerator;
 
 class ModelGenerator extends BaseGenerator
 {
     /**
      * Fields not included in the generator by default.
-     *
-     * @var array
      */
-    protected $excluded_fields = [
+    protected array $excluded_fields = [
         'created_at',
         'updated_at',
+        'deleted_at',
     ];
 
-    /** @var CommandData */
-    private $commandData;
+    private string $fileName;
 
-    /** @var string */
-    private $path;
-    private $fileName;
-    private $table;
-
-    /**
-     * ModelGenerator constructor.
-     *
-     * @param \InfyOm\Generator\Common\CommandData $commandData
-     */
-    public function __construct(CommandData $commandData)
+    public function __construct()
     {
-        $this->commandData = $commandData;
-        $this->path = $commandData->config->pathModel;
-        $this->fileName = $this->commandData->modelName.'.php';
-        $this->table = $this->commandData->dynamicVars['$TABLE_NAME$'];
+        parent::__construct();
+
+        $this->path = $this->config->paths->model;
+        $this->fileName = $this->config->modelNames->name.'.php';
     }
 
     public function generate()
     {
-        $hasMedia = false;
-        $relationshipAttributes = [];
-        $relationshipAttributeTemplate = get_template('model.relationship_atribute', 'laravel-generator');
+        $templateData = view('laravel-generator::model.model', $this->variables())->render();
 
-        foreach ($this->commandData->fields as $field) {
-            if (!$field->inIndex) {
-                continue;
-            }
-            if ($field->htmlType === 'file') {
-                $hasMedia = true;
-            }
-            /*Multiple select generation*/
-            if($field->dbInput === 'hidden,mtm'){
+        g_filesystem()->createFile($this->path.$this->fileName, $templateData);
 
-                $relationshipAttributes[] = fill_template([
-                    '$RELATION_MODEL_PLURAL$' => $field->name,
-                    '$RELATION_MODEL_PLURAL_CAPITAL$' => ucfirst($field->name),
-                    '$RELATION_MODEL_TITLE$' => preg_split('/\./', $field->title)[1],
-                ], $relationshipAttributeTemplate);
-
-            }
-        }
-
-        if($hasMedia) {
-            $templateData = get_template('model.upload_image_model', 'laravel-generator');
-        }else{
-            $templateData = get_template('model.model', 'laravel-generator');
-        }
-        $relationshipAttributes = implode('' . infy_nl_tab(1, 4), $relationshipAttributes);
-        $templateData = str_replace('$RELATIONSHIP_ATTRIBUTE$', $relationshipAttributes, $templateData);
-        $templateData = $this->fillTemplate($templateData);
-
-        FileUtil::createFile($this->path, $this->fileName, $templateData);
-
-        $this->commandData->commandComment("\nModel created: ");
-        $this->commandData->commandInfo($this->fileName);
+        $this->config->commandComment(infy_nl().'Model created: ');
+        $this->config->commandInfo($this->fileName);
     }
 
-    private function fillTemplate($templateData)
+    public function variables(): array
     {
-        $templateData = fill_template($this->commandData->dynamicVars, $templateData);
+        return [
+            'fillables'        => implode(','.infy_nl_tab(1, 2), $this->generateFillables()),
+            'casts'            => implode(','.infy_nl_tab(1, 2), $this->generateCasts()),
+            'rules'            => implode(','.infy_nl_tab(1, 2), $this->generateRules()),
+            'swaggerDocs'      => $this->fillDocs(),
+            'customPrimaryKey' => $this->customPrimaryKey(),
+            'customCreatedAt'  => $this->customCreatedAt(),
+            'customUpdatedAt'  => $this->customUpdatedAt(),
+            'customSoftDelete' => $this->customSoftDelete(),
+            'relations'        => $this->generateRelations(),
+            'timestamps'       => config('laravel_generator.timestamps.enabled', true),
+        ];
+    }
 
-        $templateData = $this->fillSoftDeletes($templateData);
+    protected function customPrimaryKey()
+    {
+        $primary = $this->config->getOption('primary');
 
+        if (!$primary) {
+            return null;
+        }
+
+        if ($primary === 'id') {
+            return null;
+        }
+
+        return $primary;
+    }
+
+    protected function customSoftDelete()
+    {
+        $deletedAt = config('laravel_generator.timestamps.deleted_at', 'deleted_at');
+
+        if ($deletedAt === 'deleted_at') {
+            return null;
+        }
+
+        return $deletedAt;
+    }
+
+    protected function customCreatedAt()
+    {
+        $createdAt = config('laravel_generator.timestamps.created_at', 'created_at');
+
+        if ($createdAt === 'created_at') {
+            return null;
+        }
+
+        return $createdAt;
+    }
+
+    protected function customUpdatedAt()
+    {
+        $updatedAt = config('laravel_generator.timestamps.updated_at', 'updated_at');
+
+        if ($updatedAt === 'updated_at') {
+            return null;
+        }
+
+        return $updatedAt;
+    }
+
+    protected function generateFillables(): array
+    {
         $fillables = [];
-        $appends = [];
-
-        foreach ($this->commandData->fields as $field) {
-            if ($field->isFillable) {
-                $fillables[] = "'".$field->name."'";
-            }
-            if($field->dbInput === 'hidden,mtm'){
-                $appends[] = "'".$field->name."'";
-            }
-        }
-
-        $templateData = $this->fillDocs($templateData);
-
-        $templateData = $this->fillTimestamps($templateData);
-
-        if ($this->commandData->getOption('primary')) {
-            $primary = infy_tab()."protected \$primaryKey = '".$this->commandData->getOption('primary')."';\n";
-        } else {
-            $primary = '';
-        }
-
-        $templateData = str_replace('$PRIMARY$', $primary, $templateData);
-
-        $templateData = str_replace('$FIELDS$', implode(','.infy_nl_tab(1, 2), $fillables), $templateData);
-        $templateData = str_replace('$APPENDS$', implode(','.infy_nl_tab(1, 2), $appends), $templateData);
-
-        $templateData = str_replace('$RULES$', implode(','.infy_nl_tab(1, 2), $this->generateRules()), $templateData);
-
-        $templateData = str_replace('$CAST$', implode(','.infy_nl_tab(1, 2), $this->generateCasts()), $templateData);
-
-        $templateData = str_replace(
-            '$RELATIONS$',
-            fill_template($this->commandData->dynamicVars, implode(PHP_EOL.infy_nl_tab(1, 1), $this->generateRelations())),
-            $templateData
-        );
-
-        $templateData = str_replace('$GENERATE_DATE$', date('F j, Y, g:i a T'), $templateData);
-
-        return $templateData;
-    }
-
-    private function fillSoftDeletes($templateData)
-    {
-        if (!$this->commandData->getOption('softDelete')) {
-            $templateData = str_replace('$SOFT_DELETE_IMPORT$', '', $templateData);
-            $templateData = str_replace('$SOFT_DELETE$', '', $templateData);
-            $templateData = str_replace('$SOFT_DELETE_DATES$', '', $templateData);
-        } else {
-            $templateData = str_replace(
-                '$SOFT_DELETE_IMPORT$', "use Illuminate\\Database\\Eloquent\\SoftDeletes;\n",
-                $templateData
-            );
-            $templateData = str_replace('$SOFT_DELETE$', infy_tab()."use SoftDeletes;\n", $templateData);
-            $deletedAtTimestamp = config('infyom.laravel_generator.timestamps.deleted_at', 'deleted_at');
-            $templateData = str_replace(
-                '$SOFT_DELETE_DATES$', infy_nl_tab()."protected \$dates = ['".$deletedAtTimestamp."'];\n",
-                $templateData
-            );
-        }
-
-        return $templateData;
-    }
-
-    private function fillDocs($templateData)
-    {
-        if ($this->commandData->getAddOn('swagger')) {
-            $templateData = $this->generateSwagger($templateData);
-        } else {
-            $docsTemplate = get_template('docs.model', 'laravel-generator');
-            $docsTemplate = fill_template($this->commandData->dynamicVars, $docsTemplate);
-
-            $fillables = '';
-            foreach ($this->commandData->relations as $relation) {
-                $fillables .= ' * @property '.$this->getPHPDocType($relation->type, $relation).PHP_EOL;
-            }
-            foreach ($this->commandData->fields as $field) {
+        if (isset($this->config->fields) && !empty($this->config->fields)) {
+            foreach ($this->config->fields as $field) {
                 if ($field->isFillable) {
-                    $fillables .= ' * @property '.$this->getPHPDocType($field->fieldType).' '.$field->name.PHP_EOL;
+                    $fillables[] = "'".$field->name."'";
                 }
             }
-            $docsTemplate = str_replace('$GENERATE_DATE$', date('F j, Y, g:i a T'), $docsTemplate);
-            $docsTemplate = str_replace('$PHPDOC$', $fillables, $docsTemplate);
-
-            $templateData = str_replace('$DOCS$', $docsTemplate, $templateData);
         }
 
-        return $templateData;
+        return $fillables;
     }
 
-    /**
-     * @param $db_type
-     * @param GeneratorFieldRelation|null $relation
-     *
-     * @return string
-     */
-    private function getPHPDocType($db_type, $relation = null)
+    protected function fillDocs(): string
     {
-        switch ($db_type) {
-            case 'datetime':
-                return 'string|\Carbon\Carbon';
-            case 'text':
-                return 'string';
-            case '1t1':
-            case 'mt1':
-                return '\\'.$this->commandData->config->nsModel.'\\'.$relation->inputs[0].' '.camel_case($relation->inputs[0]);
-            case '1tm':
-                return '\Illuminate\Database\Eloquent\Collection'.' '.$relation->inputs[0];
-            case 'mtm':
-            case 'hmt':
-                return '\Illuminate\Database\Eloquent\Collection'.' '.camel_case($relation->inputs[0]);
-            default:
-                return $db_type;
+        if (!$this->config->options->swagger) {
+            return '';
         }
+
+        return $this->generateSwagger();
     }
 
-    public function generateSwagger($templateData)
+    public function generateSwagger(): string
     {
-        $fieldTypes = SwaggerGenerator::generateTypes($this->commandData->fields);
+        $requiredFields = $this->generateRequiredFields();
 
-        $template = get_template('model_docs.model', 'swagger-generator');
+        $fieldTypes = SwaggerGenerator::generateTypes($this->config->fields);
 
-        $template = fill_template($this->commandData->dynamicVars, $template);
+        $properties = [];
+        foreach ($fieldTypes as $fieldType) {
+            $properties[] = view(
+                'swagger-generator::model.property',
+                $fieldType
+            )->render();
+        }
 
-        $template = str_replace('$REQUIRED_FIELDS$',
-            '"'.implode('"'.', '.'"', $this->generateRequiredFields()).'"', $template);
+        $requiredFields = '{'.implode(',', $requiredFields).'}';
 
-        $propertyTemplate = get_template('model_docs.property', 'swagger-generator');
-
-        $properties = SwaggerGenerator::preparePropertyFields($propertyTemplate, $fieldTypes);
-
-        $template = str_replace('$PROPERTIES$', implode(",\n", $properties), $template);
-
-        $templateData = str_replace('$DOCS$', $template, $templateData);
-
-        return $templateData;
+        return view('swagger-generator::model.model', [
+            'requiredFields' => $requiredFields,
+            'properties'     => implode(','.infy_nl().' ', $properties),
+        ]);
     }
 
-    private function generateRequiredFields()
+    protected function generateRequiredFields(): array
     {
         $requiredFields = [];
 
-        foreach ($this->commandData->fields as $field) {
-            if (!empty($field->validations)) {
-                if (str_contains($field->validations, 'required')) {
-                    $requiredFields[] = $field->name;
+        if (isset($this->config->fields) && !empty($this->config->fields)) {
+            foreach ($this->config->fields as $field) {
+                if (!empty($field->validations)) {
+                    if (Str::contains($field->validations, 'required')) {
+                        $requiredFields[] = '"'.$field->name.'"';
+                    }
                 }
             }
         }
@@ -240,34 +162,66 @@ class ModelGenerator extends BaseGenerator
         return $requiredFields;
     }
 
-    private function fillTimestamps($templateData)
+    protected function generateRules(): array
     {
-        $timestamps = TableFieldsGenerator::getTimestampFieldNames();
+        $dont_require_fields = config('laravel_generator.options.hidden_fields', [])
+                + config('laravel_generator.options.excluded_fields', $this->excluded_fields);
 
-        $replace = '';
-
-        if ($this->commandData->getOption('fromTable')) {
-            if (empty($timestamps)) {
-                $replace = infy_nl_tab()."public \$timestamps = false;\n";
-            } else {
-                list($created_at, $updated_at) = collect($timestamps)->map(function ($field) {
-                    return !empty($field) ? "'$field'" : 'null';
-                });
-
-                $replace .= infy_nl_tab()."const CREATED_AT = $created_at;";
-                $replace .= infy_nl_tab()."const UPDATED_AT = $updated_at;\n";
-            }
-        }
-
-        return str_replace('$TIMESTAMPS$', $replace, $templateData);
-    }
-
-    private function generateRules()
-    {
         $rules = [];
 
-        foreach ($this->commandData->fields as $field) {
+        foreach ($this->config->fields as $field) {
+            if (!$field->isPrimary && !in_array($field->name, $dont_require_fields)) {
+                if ($field->isNotNull && empty($field->validations)) {
+                    $field->validations = 'required';
+                }
+
+                /**
+                 * Generate some sane defaults based on the field type if we
+                 * are generating from a database table.
+                 */
+                if ($this->config->getOption('fromTable')) {
+                    $rule = empty($field->validations) ? [] : explode('|', $field->validations);
+
+                    if (!$field->isNotNull) {
+                        $rule[] = 'nullable';
+                    }
+
+                    switch ($field->dbType) {
+                        case 'integer':
+                            $rule[] = 'integer';
+                            break;
+                        case 'boolean':
+                            $rule[] = 'boolean';
+                            break;
+                        case 'float':
+                        case 'double':
+                        case 'decimal':
+                            $rule[] = 'numeric';
+                            break;
+                        case 'string':
+                        case 'text':
+                            $rule[] = 'string';
+
+                            // Enforce a maximum string length if possible.
+                            if ((int) $field->fieldDetails->getLength() > 0) {
+                                $rule[] = 'max:'.$field->fieldDetails->getLength();
+                            }
+                            break;
+                    }
+
+                    $field->validations = implode('|', $rule);
+                }
+            }
+
             if (!empty($field->validations)) {
+                if (Str::contains($field->validations, 'unique:')) {
+                    $rule = explode('|', $field->validations);
+                    // move unique rule to last
+                    usort($rule, function ($record) {
+                        return (Str::contains($record, 'unique:')) ? 1 : 0;
+                    });
+                    $field->validations = implode('|', $rule);
+                }
                 $rule = "'".$field->name."' => '".$field->validations."'";
                 $rules[] = $rule;
             }
@@ -276,25 +230,48 @@ class ModelGenerator extends BaseGenerator
         return $rules;
     }
 
-    public function generateCasts()
+    public function generateUniqueRules(): string
+    {
+        $tableNameSingular = Str::singular($this->config->tableName);
+        $uniqueRules = '';
+        foreach ($this->generateRules() as $rule) {
+            if (Str::contains($rule, 'unique:')) {
+                $rule = explode('=>', $rule);
+                $string = '$rules['.trim($rule[0]).'].","';
+
+                $uniqueRules .= '$rules['.trim($rule[0]).'] = '.$string.'.$this->route("'.$tableNameSingular.'");';
+            }
+        }
+
+        return $uniqueRules;
+    }
+
+    public function generateCasts(): array
     {
         $casts = [];
 
         $timestamps = TableFieldsGenerator::getTimestampFieldNames();
 
-        foreach ($this->commandData->fields as $field) {
+        foreach ($this->config->fields as $field) {
             if (in_array($field->name, $timestamps)) {
                 continue;
             }
 
             $rule = "'".$field->name."' => ";
 
-            switch ($field->fieldType) {
+            switch (strtolower($field->dbType)) {
                 case 'integer':
+                case 'increments':
+                case 'smallinteger':
+                case 'long':
+                case 'biginteger':
                     $rule .= "'integer'";
                     break;
                 case 'double':
                     $rule .= "'double'";
+                    break;
+                case 'decimal':
+                    $rule .= sprintf("'decimal:%d'", $field->numberDecimalPoints);
                     break;
                 case 'float':
                     $rule .= "'float'";
@@ -302,8 +279,8 @@ class ModelGenerator extends BaseGenerator
                 case 'boolean':
                     $rule .= "'boolean'";
                     break;
-                case 'dateTime':
-                case 'dateTimeTz':
+                case 'datetime':
+                case 'datetimetz':
                     $rule .= "'datetime'";
                     break;
                 case 'date':
@@ -328,25 +305,37 @@ class ModelGenerator extends BaseGenerator
         return $casts;
     }
 
-    private function generateRelations()
+    protected function generateRelations(): string
     {
         $relations = [];
-Log::alert($this->commandData->relations);
-        foreach ($this->commandData->relations as $relation) {
-            $relationText = $relation->getRelationFunctionText();
 
-            if (!empty($relationText)) {
-                $relations[] = $relationText;
+        $count = 1;
+        $fieldsArr = [];
+        if (isset($this->config->relations) && !empty($this->config->relations)) {
+            foreach ($this->config->relations as $relation) {
+                $field = (isset($relation->inputs[0])) ? $relation->inputs[0] : null;
+
+                $relationShipText = $field;
+                if (in_array($field, $fieldsArr)) {
+                    $relationShipText = $relationShipText.'_'.$count;
+                    $count++;
+                }
+
+                $relationText = $relation->getRelationFunctionText($relationShipText);
+                if (!empty($relationText)) {
+                    $fieldsArr[] = $field;
+                    $relations[] = $relationText;
+                }
             }
         }
 
-        return $relations;
+        return implode(infy_nl_tab(2), $relations);
     }
 
     public function rollback()
     {
         if ($this->rollbackFile($this->path, $this->fileName)) {
-            $this->commandData->commandComment('Model file deleted: '.$this->fileName);
+            $this->config->commandComment('Model file deleted: '.$this->fileName);
         }
     }
 }

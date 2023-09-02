@@ -2,39 +2,24 @@
 
 namespace InfyOm\Generator\Generators\Scaffold;
 
-use Illuminate\Filesystem\Filesystem;
-use Illuminate\Support\Facades\Log;
+use Exception;
 use Illuminate\Support\Str;
-use InfyOm\Generator\Common\CommandData;
 use InfyOm\Generator\Generators\BaseGenerator;
-use InfyOm\Generator\Utils\FileUtil;
-use InfyOm\Generator\Utils\GeneratorFieldsInputUtil;
+use InfyOm\Generator\Generators\ViewServiceProviderGenerator;
 use InfyOm\Generator\Utils\HTMLFieldGenerator;
-use Themsaid\Langman\Manager;
 
 class ViewGenerator extends BaseGenerator
 {
-    /** @var CommandData */
-    private $commandData;
+    private string $templateType;
+    private string $templateViewPath;
 
-    /** @var string */
-    private $path;
-
-
-    /** @var string */
-    private $templateType;
-
-    /** @var array */
-    private $htmlFields;
-
-    private $langManager;
-
-    public function __construct(CommandData $commandData)
+    public function __construct()
     {
-        $this->commandData = $commandData;
-        $this->path = $commandData->config->pathViews;
-        $this->langManager = new Manager(new Filesystem(), config('langman.path'), []);
-        $this->templateType = config('infyom.laravel_generator.templates', 'adminlte-templates');
+        parent::__construct();
+
+        $this->path = $this->config->paths->views;
+        $this->templateType = config('laravel_generator.templates', 'adminlte-templates');
+        $this->templateViewPath = $this->templateType.'::templates';
     }
 
     public function generate()
@@ -43,10 +28,17 @@ class ViewGenerator extends BaseGenerator
             mkdir($this->path, 0755, true);
         }
 
-        $this->commandData->commandComment("\nGenerating Views...");
+//        $htmlInputs = Arr::pluck($this->config->fields, 'htmlInput');
 
-        if ($this->commandData->getOption('views')) {
-            $viewsToBeGenerated = explode(',', $this->commandData->getOption('views'));
+        //TODO: Manage files
+//        if (in_array('file', $htmlInputs)) {
+//            $this->config->addDynamicVariable('$FILES$', ", 'files' => true");
+//        }
+
+        $this->config->commandComment(infy_nl().'Generating Views...');
+
+        if ($this->config->getOption('views')) {
+            $viewsToBeGenerated = explode(',', $this->config->getOption('views'));
 
             if (in_array('index', $viewsToBeGenerated)) {
                 $this->generateTable();
@@ -77,263 +69,225 @@ class ViewGenerator extends BaseGenerator
             $this->generateUpdate();
             $this->generateShowFields();
             $this->generateShow();
-            $this->generateLanguage();
         }
 
-        $this->commandData->commandComment('Views created: ');
+        $this->config->commandComment('Views created: ');
     }
 
-    private function generateTable()
+    protected function generateTable()
     {
-        if ($this->commandData->getAddOn('datatables')) {
-            $templateData = $this->generateDataTableBody();
-            $this->generateDataTableActions();
-        } else {
-            $templateData = $this->generateBladeTableBody();
+        if ($this->config->tableType === 'livewire') {
+            return;
         }
 
-        FileUtil::createFile($this->path, 'table.blade.php', $templateData);
+        switch ($this->config->tableType) {
+            case 'blade':
+                $templateData = $this->generateBladeTableBody();
+                break;
 
-        $this->commandData->commandInfo('table.blade.php created');
+            case 'datatables':
+                $templateData = $this->generateDataTableBody();
+                $this->generateDataTableActions();
+                break;
+
+            default:
+                throw new Exception('Invalid Table Type');
+        }
+
+        g_filesystem()->createFile($this->path.'table.blade.php', $templateData);
+
+        $this->config->commandInfo('table.blade.php created');
     }
 
-    private function generateDataTableBody()
+    protected function generateDataTableBody(): string
     {
-        $templateData = get_template('scaffold.views.datatable_body', $this->templateType);
-
-        return fill_template($this->commandData->dynamicVars, $templateData);
+        return view($this->templateViewPath.'.scaffold.table.datatable.body')->render();
     }
 
-    private function generateDataTableActions()
+    protected function generateDataTableActions()
     {
-        $templateData = get_template('scaffold.views.datatables_actions', $this->templateType);
+        $templateData = view($this->templateViewPath.'.scaffold.table.datatable.actions')->render();
 
-        $templateData = fill_template($this->commandData->dynamicVars, $templateData);
+        g_filesystem()->createFile($this->path.'datatables_actions.blade.php', $templateData);
 
-        FileUtil::createFile($this->path, 'datatables_actions.blade.php', $templateData);
-
-        $this->commandData->commandInfo('datatables_actions.blade.php created');
+        $this->config->commandInfo('datatables_actions.blade.php created');
     }
 
-    private function generateBladeTableBody()
+    protected function generateBladeTableBody(): string
     {
-        $templateData = get_template('scaffold.views.blade_table_body', $this->templateType);
-
-        $templateData = fill_template($this->commandData->dynamicVars, $templateData);
-
-        $templateData = str_replace('$FIELD_HEADERS$', $this->generateTableHeaderFields(), $templateData);
-
-        $cellFieldTemplate = get_template('scaffold.views.table_cell', $this->templateType);
-
         $tableBodyFields = [];
 
-        foreach ($this->commandData->fields as $field) {
+        foreach ($this->config->fields as $field) {
             if (!$field->inIndex) {
                 continue;
             }
 
-            $tableBodyFields[] = fill_template_with_field_data(
-                $this->commandData->dynamicVars,
-                $this->commandData->fieldNamesMapping,
-                $cellFieldTemplate,
-                $field
-            );
+            $tableBodyFields[] = view($this->templateViewPath.'.scaffold.table.blade.cell', [
+                'modelVariable' => $this->config->modelNames->camel,
+                'fieldName'     => $field->name,
+            ])->render();
         }
 
-        $tableBodyFields = implode(infy_nl_tab(1, 3), $tableBodyFields);
+        $tableBodyFields = implode(infy_nl_tab(1, 5), $tableBodyFields);
 
-        return str_replace('$FIELD_BODY$', $tableBodyFields, $templateData);
+        $paginate = view($this->templateViewPath.'.scaffold.paginate')->render();
+
+        return view($this->templateViewPath.'.scaffold.table.blade.body', [
+            'fieldHeaders' => $this->generateTableHeaderFields(),
+            'fieldBody'    => $tableBodyFields,
+            'paginate'     => $paginate,
+        ])->render();
     }
 
-    private function generateTableHeaderFields()
+    protected function generateTableHeaderFields(): string
     {
-        $headerFieldTemplate = get_template('scaffold.views.table_header', $this->templateType);
-
         $headerFields = [];
 
-        foreach ($this->commandData->fields as $field) {
+        foreach ($this->config->fields as $field) {
             if (!$field->inIndex) {
                 continue;
             }
-            $headerFields[] = $fieldTemplate = fill_template_with_field_data(
-                $this->commandData->dynamicVars,
-                $this->commandData->fieldNamesMapping,
-                $headerFieldTemplate,
-                $field
-            );
+
+            $headerFields[] = view(
+                $this->templateType.'::templates.scaffold.table.blade.header',
+                $field->variables()
+            )->render();
         }
 
-        return implode(infy_nl_tab(1, 2), $headerFields);
+        return implode(infy_nl_tab(1, 4), $headerFields);
     }
 
-    private function generateIndex()
+    protected function generateIndex()
     {
-        $templateData = get_template('scaffold.views.index', $this->templateType);
+        switch ($this->config->tableType) {
+            case 'datatables':
+            case 'blade':
+                $tableReplaceString = "@include('".$this->config->prefixes->getViewPrefixForInclude().$this->config->modelNames->snakePlural.".table')";
+                break;
 
-        $templateData = fill_template($this->commandData->dynamicVars, $templateData);
+            case 'livewire':
+                $tableReplaceString = view($this->templateViewPath.'.scaffold.table.livewire.body')->render();
+                break;
 
-        if ($this->commandData->getOption('datatables')) {
-            $templateData = str_replace('$PAGINATE$', '', $templateData);
-        } else {
-            $paginate = $this->commandData->getOption('paginate');
-
-            if ($paginate) {
-                $paginateTemplate = get_template('scaffold.views.paginate', $this->templateType);
-
-                $paginateTemplate = fill_template($this->commandData->dynamicVars, $paginateTemplate);
-
-                $templateData = str_replace('$PAGINATE$', $paginateTemplate, $templateData);
-            } else {
-                $templateData = str_replace('$PAGINATE$', '', $templateData);
-            }
+            default:
+                throw new Exception('Invalid table type');
         }
 
-        FileUtil::createFile($this->path, 'index.blade.php', $templateData);
+        $templateData = view($this->templateViewPath.'.scaffold.index', ['table' => $tableReplaceString])
+            ->render();
 
-        $this->commandData->commandInfo('index.blade.php created');
+        g_filesystem()->createFile($this->path.'index.blade.php', $templateData);
+
+        $this->config->commandInfo('index.blade.php created');
     }
 
-    /**
-    '$MODEL_NAME_SNAKE$' => '$MODEL_NAME_HUMAN$',
-    '$MODEL_NAME_SNAKE$_plural' => '$MODEL_NAME_PLURAL_HUMAN$',
-    '$MODEL_NAME_SNAKE$_desc' => '$MODEL_NAME_PLURAL_HUMAN$ Management',
-    '$MODEL_NAME_SNAKE$_edit' => 'Edit $MODEL_NAME_HUMAN$',
-    '$MODEL_NAME_SNAKE$_table' => '$MODEL_NAME_PLURAL_HUMAN$ List',
-    '$MODEL_NAME_SNAKE$_create' => 'Create $MODEL_NAME_HUMAN$',
-     */
-
-    /**
-    '$MODEL_NAME_SNAKE$_$FIELD_NAME$' => '$FIELD_NAME_TITLE$',
-    '$MODEL_NAME_SNAKE$_$FIELD_NAME$_help' => 'Insert $FIELD_NAME_TITLE$',
-    '$MODEL_NAME_SNAKE$_$FIELD_NAME$_placeholder' => 'Insert $FIELD_NAME_TITLE$',
-     */
-    private function generateLanguage()
+    protected function generateFields()
     {
-        $this->langManager->fillKeys('lang', $this->getLangArray());
-    }
+        $htmlFields = [];
 
-    private function getTransArray($string = ''){
-        $result = [];
-        foreach ($this->langManager->languages() as $codelang){
-            $result[$codelang] = $string;
-        }
-        return $result;
-    }
-    
-    private function getLangArray(){
-        $mSnake = $this->commandData->config->mSnake;
-        $lang = [
-            $mSnake => $this->getTransArray($this->commandData->config->mHuman),
-            $mSnake."_plural" => $this->getTransArray($this->commandData->config->mHumanPlural),
-            $mSnake."_desc" => $this->getTransArray($this->commandData->config->mHumanPlural.' Management'),
-            $mSnake."_edit" => $this->getTransArray('Edit '.$this->commandData->config->mHuman),
-            $mSnake."_table" => $this->getTransArray($this->commandData->config->mHumanPlural.' List'),
-            $mSnake."_create" => $this->getTransArray('Create '.$this->commandData->config->mHuman),
-        ];
-        foreach ($this->commandData->fields as $field) {
-            $title = preg_replace('/-|_/',' ',title_case($field->name));
-            if($field->inIndex || $field->inForm){
-                $lang[$mSnake.'_'.$field->name] = $this->getTransArray($title);
-            }
-            if($field->inForm){
-                $lang[$mSnake.'_'.$field->name.'_help'] = $this->getTransArray('Insert '.$title);
-                $lang[$mSnake.'_'.$field->name.'_placeholder'] = $this->getTransArray('Insert '.$title);
-            }
-        }
-        return $lang;
-    }
-
-    private function generateFields()
-    {
-        $this->htmlFields = [];
-        $startSeparator = '<div style="flex: 50%;max-width: 50%;padding: 0 4px;" class="column">';
-        $endSeparator = '</div>';
-
-        foreach ($this->commandData->fields as $field) {
+        foreach ($this->config->fields as $field) {
             if (!$field->inForm) {
                 continue;
             }
-            $this->commandData->addDynamicVariable('$RANDOM_VARIABLE$', 'var' . time() . rand() . 'ble');
-            $fieldTemplate = HTMLFieldGenerator::generateHTML($field, $this->templateType);
 
-            if (!empty($fieldTemplate)) {
-                $fieldTemplate = fill_template_with_field_data(
-                    $this->commandData->dynamicVars,
-                    $this->commandData->fieldNamesMapping,
-                    $fieldTemplate,
-                    $field
-                );
-                $this->htmlFields[] = $fieldTemplate;
-            }
+            $htmlFields[] = HTMLFieldGenerator::generateHTML(
+                $field,
+                $this->templateViewPath
+            );
+
+            // TODO
+//            if ($field->htmlType == 'selectTable') {
+//                $inputArr = explode(',', $field->htmlValues[1]);
+//                $columns = '';
+//                foreach ($inputArr as $item) {
+//                    $columns .= "'$item'" . ',';  //e.g 'email,id,'
+//                }
+//                $columns = substr_replace($columns, '', -1); // remove last ,
+//
+//                $htmlValues = explode(',', $field->htmlValues[0]);
+//                $selectTable = $htmlValues[0];
+//                $modalName = null;
+//                if (count($htmlValues) == 2) {
+//                    $modalName = $htmlValues[1];
+//                }
+//
+//                $tableName = $this->config->tableName;
+//                $viewPath = $this->config->prefixes->view;
+//                if (!empty($viewPath)) {
+//                    $tableName = $viewPath . '.' . $tableName;
+//                }
+//
+//                $variableName = Str::singular($selectTable) . 'Items'; // e.g $userItems
+//
+//                $fieldTemplate = $this->generateViewComposer($tableName, $variableName, $columns, $selectTable, $modalName);
+//            }
         }
 
-        foreach ($this->htmlFields as $index => $field) {
-            if (round(count($this->htmlFields) / 2) == $index + 1) {
-                $this->htmlFields[$index] = $this->htmlFields[$index] . "\n" . $endSeparator . "\n" . $startSeparator;
-            }
+        g_filesystem()->createFile($this->path.'fields.blade.php', implode(infy_nls(2), $htmlFields));
+        $this->config->commandInfo('field.blade.php created');
+    }
+
+    private function generateViewComposer($tableName, $variableName, $columns, $selectTable, $modelName = null): string
+    {
+        $templateName = 'scaffold.fields.select';
+        if ($this->config->isLocalizedTemplates()) {
+            $templateName .= '_locale';
         }
+        $fieldTemplate = get_template($templateName, $this->templateType);
 
-        $templateData = get_template('scaffold.views.fields', $this->templateType);
-        $templateData = fill_template($this->commandData->dynamicVars, $templateData);
+        $viewServiceProvider = new ViewServiceProviderGenerator();
+        $viewServiceProvider->generate();
+        $viewServiceProvider->addViewVariables($tableName.'.fields', $variableName, $columns, $selectTable, $modelName);
 
-        $htmlFieldsString = implode("\n\n", $this->htmlFields);
-        $htmlFieldsString = $startSeparator . "\n" . $htmlFieldsString . "\n" . $endSeparator;
-
-        $templateData = str_replace('$FIELDS$', $htmlFieldsString, $templateData);
-        FileUtil::createFile($this->path, 'fields.blade.php', $templateData);
-        $this->commandData->commandInfo('field.blade.php created');
+        return str_replace(
+            '$INPUT_ARR$',
+            '$'.$variableName,
+            $fieldTemplate
+        );
     }
 
-    private function generateCreate()
+    protected function generateCreate()
     {
-        $templateData = get_template('scaffold.views.create', $this->templateType);
+        $templateData = view($this->templateViewPath.'.scaffold.create')->render();
 
-        $templateData = fill_template($this->commandData->dynamicVars, $templateData);
-
-        FileUtil::createFile($this->path, 'create.blade.php', $templateData);
-        $this->commandData->commandInfo('create.blade.php created');
+        g_filesystem()->createFile($this->path.'create.blade.php', $templateData);
+        $this->config->commandInfo('create.blade.php created');
     }
 
-    private function generateUpdate()
+    protected function generateUpdate()
     {
-        $templateData = get_template('scaffold.views.edit', $this->templateType);
+        $templateData = view($this->templateViewPath.'.scaffold.edit')->render();
 
-        $templateData = fill_template($this->commandData->dynamicVars, $templateData);
-
-        FileUtil::createFile($this->path, 'edit.blade.php', $templateData);
-        $this->commandData->commandInfo('edit.blade.php created');
+        g_filesystem()->createFile($this->path.'edit.blade.php', $templateData);
+        $this->config->commandInfo('edit.blade.php created');
     }
 
-    private function generateShowFields()
+    protected function generateShowFields()
     {
-        $fieldTemplate = get_template('scaffold.views.show_field', $this->templateType);
-
         $fieldsStr = '';
 
-        foreach ($this->commandData->fields as $field) {
-            $singleFieldStr = str_replace('$FIELD_NAME_TITLE$', Str::title(str_replace('_', ' ', $field->name)),
-                $fieldTemplate);
-            $singleFieldStr = str_replace('$FIELD_NAME$', $field->name, $singleFieldStr);
-            $singleFieldStr = fill_template($this->commandData->dynamicVars, $singleFieldStr);
+        foreach ($this->config->fields as $field) {
+            if (!$field->inView) {
+                continue;
+            }
 
-            $fieldsStr .= $singleFieldStr . "\n\n";
+            $fieldsStr .= view($this->templateViewPath.'.scaffold.show_field', $field->variables());
+            $fieldsStr .= infy_nls(2);
         }
 
-        FileUtil::createFile($this->path, 'show_fields.blade.php', $fieldsStr);
-        $this->commandData->commandInfo('show_fields.blade.php created');
+        g_filesystem()->createFile($this->path.'show_fields.blade.php', $fieldsStr);
+        $this->config->commandInfo('show_fields.blade.php created');
     }
 
-    private function generateShow()
+    protected function generateShow()
     {
-        $templateData = get_template('scaffold.views.show', $this->templateType);
+        $templateData = view($this->templateViewPath.'.scaffold.show')->render();
 
-        $templateData = fill_template($this->commandData->dynamicVars, $templateData);
-
-        FileUtil::createFile($this->path, 'show.blade.php', $templateData);
-        $this->commandData->commandInfo('show.blade.php created');
+        g_filesystem()->createFile($this->path.'show.blade.php', $templateData);
+        $this->config->commandInfo('show.blade.php created');
     }
 
-    public function rollback()
+    public function rollback($views = [])
     {
         $files = [
             'table.blade.php',
@@ -345,59 +299,21 @@ class ViewGenerator extends BaseGenerator
             'show_fields.blade.php',
         ];
 
-        if ($this->commandData->getAddOn('datatables')) {
+        if (!empty($views)) {
+            $files = [];
+            foreach ($views as $view) {
+                $files[] = $view.'.blade.php';
+            }
+        }
+
+        if ($this->config->tableType === 'datatables') {
             $files[] = 'datatables_actions.blade.php';
         }
 
         foreach ($files as $file) {
             if ($this->rollbackFile($this->path, $file)) {
-                $this->commandData->commandComment($file . ' file deleted');
+                $this->config->commandComment($file.' file deleted');
             }
         }
-        $this->langManager->removeKey('lang', array_keys($this->getLangArray()));
-    }
-
-    public function generateCustomField($fields)
-    {
-        $this->htmlFields = [];
-//        $this->commandData = new CommandData($this->commandData, CommandData::$COMMAND_TYPE_API_SCAFFOLD);
-//        $this->commandData->commandType = CommandData::$COMMAND_TYPE_API_SCAFFOLD;
-        $startSeparator = '<div style="flex: 50%;max-width: 50%;padding: 0 4px;" class="column">';
-        $endSeparator = '</div>';
-
-        foreach ($fields as $field) {
-            $dynamicVars = [
-                '$RANDOM_VARIABLE$' => 'var' . time() . rand() . 'ble',
-                '$FIELD_NAME$' => $field->name,
-                '$MODEL_NAME_SNAKE$' => $field->custom_field_model
-            ];
-            $field->htmlType = $field['type'];
-            $fieldTemplate = HTMLFieldGenerator::generateHTML($field, config('infyom.laravel_generator.templates', 'adminlte-templates'));
-
-            if (!empty($fieldTemplate)) {
-                foreach ($dynamicVars as $variable => $value) {
-                    $fieldTemplate = str_replace($variable, $value, $fieldTemplate);
-                }
-                $this->htmlFields[] = $fieldTemplate;
-            }
-        }
-
-        foreach ($this->htmlFields as $index => $field) {
-            if (round(count($this->htmlFields) / 2) == $index + 1) {
-                $this->htmlFields[$index] = $this->htmlFields[$index] . "\n" . $endSeparator . "\n" . $startSeparator;
-            }
-        }
-
-//        $templateData = get_template('scaffold.views.fields', $this->templateType);
-//        $templateData = fill_template($this->commandData->dynamicVars, $templateData);
-
-        $htmlFieldsString = implode("\n\n", $this->htmlFields);
-        $htmlFieldsString = $startSeparator . "\n" . $htmlFieldsString . "\n" . $endSeparator;
-
-        return $htmlFieldsString;
-
-//        $templateData = str_replace('$FIELDS$', $htmlFieldsString, $templateData);
-//        FileUtil::createFile($this->path, 'fields.blade.php', $templateData);
-//        $this->commandData->commandInfo('field.blade.php created');
     }
 }

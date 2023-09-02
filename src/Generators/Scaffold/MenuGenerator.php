@@ -3,56 +3,47 @@
 namespace InfyOm\Generator\Generators\Scaffold;
 
 use Illuminate\Support\Str;
-use InfyOm\Generator\Common\CommandData;
 use InfyOm\Generator\Generators\BaseGenerator;
 
 class MenuGenerator extends BaseGenerator
 {
-    /** @var CommandData */
-    private $commandData;
+    private string $templateType;
 
-    /** @var string */
-    private $path;
-
-    /** @var string */
-    private $templateType;
-
-    /** @var string */
-    private $menuContents;
-
-    /** @var string */
-    private $menuTemplate;
-
-    public function __construct(CommandData $commandData)
+    public function __construct()
     {
-        $this->commandData = $commandData;
-        $this->path = config(
-            'infyom.laravel_generator.path.views',
-            base_path('resources/views/'
-            )
-        ).$commandData->getAddOn('menu.menu_file');
-        $this->templateType = config('infyom.laravel_generator.templates', 'adminlte-templates');
+        parent::__construct();
 
-        $this->menuContents = file_get_contents($this->path);
-
-        $this->menuTemplate = get_template('scaffold.layouts.menu_template', $this->templateType);
-
-        $this->menuTemplate = fill_template($this->commandData->dynamicVars, $this->menuTemplate);
+        $this->path = config('laravel_generator.path.menu_file', resource_path('views/layouts/menu.blade.php'));
+        $this->templateType = config('laravel_generator.templates', 'adminlte-templates');
     }
 
     public function generate()
     {
-        $this->menuContents .= $this->menuTemplate.infy_nl();
+        $menuContents = g_filesystem()->getFile($this->path);
 
-        file_put_contents($this->path, $this->menuContents);
-        $this->commandData->commandComment("\n".$this->commandData->config->mCamelPlural.' menu added.');
+        $menu = view($this->templateType.'::templates.layouts.menu_template')->render();
+
+        if (Str::contains($menuContents, $menu)) {
+            $this->config->commandInfo(infy_nl().'Menu '.$this->config->modelNames->humanPlural.' already exists, Skipping Adjustment.');
+
+            return;
+        }
+
+        $menuContents .= infy_nl().$menu;
+
+        g_filesystem()->createFile($this->path, $menuContents);
+        $this->config->commandComment(infy_nl().$this->config->modelNames->dashedPlural.' menu added.');
     }
 
     public function rollback()
     {
-        if (Str::contains($this->menuContents, $this->menuTemplate)) {
-            file_put_contents($this->path, str_replace($this->menuTemplate, '', $this->menuContents));
-            $this->commandData->commandComment('menu deleted');
+        $menuContents = g_filesystem()->getFile($this->path);
+
+        $menu = view($this->templateType.'::templates.layouts.menu_template')->render();
+
+        if (Str::contains($menuContents, $menu)) {
+            g_filesystem()->createFile($this->path, str_replace($menu, '', $menuContents));
+            $this->config->commandComment('menu deleted');
         }
     }
 }

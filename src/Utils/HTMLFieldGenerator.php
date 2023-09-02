@@ -2,159 +2,95 @@
 
 namespace InfyOm\Generator\Utils;
 
+use Illuminate\Support\Str;
 use InfyOm\Generator\Common\GeneratorField;
 
 class HTMLFieldGenerator
 {
-    public static function generateHTML(GeneratorField $field, $templateType)
+    public static function generateHTML(GeneratorField $field, $templateType): string
     {
-        $fieldTemplate = '';
+        $viewName = $field->htmlType;
+        $variables = [];
+
+        if (!empty($validations = self::generateValidations($field))) {
+            $variables['options'] = ', '.implode(', ', $validations);
+        }
 
         switch ($field->htmlType) {
-            case 'text':
-            case 'textarea':
-            case 'date':
-            case 'file':
-            case 'email':
-            case 'password':
-                $fieldTemplate = get_template('scaffold.fields.' . $field->htmlType, $templateType);
-                break;
-            case 'number':
-                $fieldTemplate = get_template('scaffold.fields.' . $field->htmlType, $templateType);
-                break;
             case 'select':
             case 'enum':
-                if ($field->dbInput === 'hidden,mtm') {
-                    $fieldTemplate = get_template('scaffold.fields.selects', $templateType);
-                } else {
-                    $fieldTemplate = get_template('scaffold.fields.select', $templateType);
-                }
-                if (starts_with($field->htmlValues[0], '$')) {
-                    $fieldTemplate = str_replace(
-                        '$INPUT_ARR$',
-                        $field->htmlValues[0],
-                        $fieldTemplate
-                    );
-                    $fieldTemplate = str_replace(
-                        '$INPUT_ARR_SELECTED$',
-                        str_plural($field->htmlValues[0]) . 'Selected',
-                        $fieldTemplate
-                    );
-                } else {
-                    $radioLabels = GeneratorFieldsInputUtil::prepareKeyValueArrFromLabelValueStr($field->htmlValues);
+                $viewName = 'select';
+                $keyValues = GeneratorFieldsInputUtil::prepareKeyValueArrFromLabelValueStr($field->htmlValues);
 
-                    $fieldTemplate = str_replace(
-                        '$INPUT_ARR$',
-                        GeneratorFieldsInputUtil::prepareKeyValueArrayStr($radioLabels),
-                        $fieldTemplate
-                    );
-                }
+                $variables = [
+                    'selectValues' => GeneratorFieldsInputUtil::prepareKeyValueArrayStr($keyValues),
+                ];
                 break;
             case 'checkbox':
-                $fieldTemplate = get_template('scaffold.fields.checkbox', $templateType);
                 if (count($field->htmlValues) > 0) {
                     $checkboxValue = $field->htmlValues[0];
                 } else {
                     $checkboxValue = 1;
                 }
-                $fieldTemplate = str_replace('$CHECKBOX_VALUE$', $checkboxValue, $fieldTemplate);
+                $variables['checkboxVal'] = $checkboxValue;
                 break;
             case 'radio':
-                $fieldTemplate = get_template('scaffold.fields.radio_group', $templateType);
-                $radioTemplate = get_template('scaffold.fields.radio', $templateType);
-
-                $radioLabels = GeneratorFieldsInputUtil::prepareKeyValueArrFromLabelValueStr($field->htmlValues);
+                $keyValues = GeneratorFieldsInputUtil::prepareKeyValueArrFromLabelValueStr($field->htmlValues);
 
                 $radioButtons = [];
-                foreach ($radioLabels as $label => $value) {
-                    $radioButtonTemplate = str_replace('$LABEL$', $label, $radioTemplate);
-                    $radioButtonTemplate = str_replace('$VALUE$', $value, $radioButtonTemplate);
-                    $radioButtons[] = $radioButtonTemplate;
+                foreach ($keyValues as $label => $value) {
+                    $radioButtons[] = view($templateType.'.fields.radio', [
+                        'label'     => $label,
+                        'value'     => $value,
+                        'fieldName' => $field->name,
+                    ]);
                 }
-                $fieldTemplate = str_replace('$RADIO_BUTTONS$', implode("\n", $radioButtons), $fieldTemplate);
-                break;
-            case 'boolean':
-                $fieldTemplate = get_template('scaffold.fields.boolean', $templateType);
-                break;
+
+                return view($templateType.'.fields.radio_group', array_merge(
+                    ['radioButtons' => implode(infy_nl_tab(), $radioButtons)],
+                    array_merge(
+                        $field->variables(),
+                        $variables
+                    )
+                ))->render();
         }
 
-        return $fieldTemplate;
+        return view(
+            $templateType.'.fields.'.$viewName,
+            array_merge(
+                $field->variables(),
+                $variables
+            )
+        )->render();
     }
 
-
-    public static function generateCustomFieldHTML(GeneratorField $field, $templateType)
+    public static function generateValidations(GeneratorField $field)
     {
-        $fieldTemplate = '';
+        $validations = explode('|', $field->validations);
+        $validationRules = [];
 
-        switch ($field->htmlType) {
-            case 'text':
-            case 'textarea':
-            case 'date':
-            case 'file':
-            case 'email':
-            case 'password':
-                $fieldTemplate = get_template('scaffold.custom_fields.' . $field->htmlType, $templateType);
-                break;
-            case 'number':
-                $fieldTemplate = get_template('scaffold.custom_fields.' . $field->htmlType, $templateType);
-                break;
-            case 'select':
-            case 'enum':
-                if ($field->dbInput === 'hidden,mtm') {
-                    $fieldTemplate = get_template('scaffold.custom_fields.selects', $templateType);
-                } else {
-                    $fieldTemplate = get_template('scaffold.custom_fields.select', $templateType);
-                }
-                if (starts_with($field->htmlValues[0], '$')) {
-                    $fieldTemplate = str_replace(
-                        '$INPUT_ARR$',
-                        $field->htmlValues[0],
-                        $fieldTemplate
-                    );
-                    $fieldTemplate = str_replace(
-                        '$INPUT_ARR_SELECTED$',
-                        str_plural($field->htmlValues[0]) . 'Selected',
-                        $fieldTemplate
-                    );
-                } else {
-                    $radioLabels = GeneratorFieldsInputUtil::prepareKeyValueArrFromLabelValueStr($field->htmlValues);
+        foreach ($validations as $validation) {
+            if ($validation === 'required') {
+                $validationRules[] = "'required'";
+                continue;
+            }
 
-                    $fieldTemplate = str_replace(
-                        '$INPUT_ARR$',
-                        GeneratorFieldsInputUtil::prepareKeyValueArrayStr($radioLabels),
-                        $fieldTemplate
-                    );
-                }
-                break;
-            case 'checkbox':
-                $fieldTemplate = get_template('scaffold.custom_fields.checkbox', $templateType);
-                if (count($field->htmlValues) > 0) {
-                    $checkboxValue = $field->htmlValues[0];
-                } else {
-                    $checkboxValue = 1;
-                }
-                $fieldTemplate = str_replace('$CHECKBOX_VALUE$', $checkboxValue, $fieldTemplate);
-                break;
-            case 'radio':
-                $fieldTemplate = get_template('scaffold.custom_fields.radio_group', $templateType);
-                $radioTemplate = get_template('scaffold.custom_fields.radio', $templateType);
+            if (!Str::contains($validation, ['max:', 'min:'])) {
+                continue;
+            }
 
-                $radioLabels = GeneratorFieldsInputUtil::prepareKeyValueArrFromLabelValueStr($field->htmlValues);
+            $validationText = substr($validation, 0, 3);
+            $sizeInNumber = substr($validation, 4);
 
-                $radioButtons = [];
-                foreach ($radioLabels as $label => $value) {
-                    $radioButtonTemplate = str_replace('$LABEL$', $label, $radioTemplate);
-                    $radioButtonTemplate = str_replace('$VALUE$', $value, $radioButtonTemplate);
-                    $radioButtonTemplate = str_replace('$FIELD_VALUE$', in_array($value,$field->validations)? '1': 'null', $radioButtonTemplate);
-                    $radioButtons[] = $radioButtonTemplate;
-                }
-                $fieldTemplate = str_replace('$RADIO_BUTTONS$', implode("\n", $radioButtons), $fieldTemplate);
-                break;
-            case 'boolean':
-                $fieldTemplate = get_template('scaffold.custom_fields.boolean', $templateType);
-                break;
+            $sizeText = ($validationText == 'min') ? 'minlength' : 'maxlength';
+            if ($field->htmlType == 'number') {
+                $sizeText = $validationText;
+            }
+
+            $size = "'$sizeText' => $sizeInNumber";
+            $validationRules[] = $size;
         }
 
-        return $fieldTemplate;
+        return $validationRules;
     }
 }
